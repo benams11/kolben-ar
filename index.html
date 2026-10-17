@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AR Kolben</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script>
+    // Metall ohne Umgebungs-Map wirkt im Browser fast schwarz -> Material leicht anpassen
+    AFRAME.registerComponent('metall', {
+      init() {
+        this.el.addEventListener('model-loaded', () => {
+          this.el.getObject3D('mesh').traverse(n => {
+            if (n.isMesh) {
+              n.material.color.set('#c8ccd0');
+              n.material.metalness = 0.6;
+              n.material.roughness = 0.35;
+            }
+          });
+        });
+      }
+    });
+  </script>
+  <style>body{margin:0;overflow:hidden}</style>
+</head>
+<body>
+  <a-scene mindar-image="imageTargetSrc: targets.mind; filterMinCF: 0.001; filterBeta: 0.01"
+           vr-mode-ui="enabled: false"
+           device-orientation-permission-ui="enabled: false"
+           renderer="colorManagement: true">
+
+    <a-assets>
+      <a-asset-item id="kolben" src="kolben.glb"></a-asset-item>
+    </a-assets>
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <a-light type="ambient" intensity="0.7"></a-light>
+    <a-light type="directional" position="1 2 2" intensity="1.2"></a-light>
+    <a-light type="directional" position="-2 -1 1" intensity="0.5"></a-light>
+
+    <!-- 1 Einheit = Bildbreite. x = rechts, y = oben, z = aus dem Bild heraus -->
+    <a-entity mindar-image-target="targetIndex: 0">
+      <!-- Grundposition: Bildmitte, 0.15 Bildbreiten vor dem Bild -->
+      <a-entity position="0 0 0.15">
+        <!-- Hub: ±0.08 Bildbreiten entlang der Bild-Hochachse -->
+        <a-entity animation="property: position; from: 0 -0.08 0; to: 0 0.08 0;
+                             dur: 1200; dir: alternate; loop: true; easing: easeInOutSine">
+          <!-- Kolben 115 mm hoch; scale 2.6 -> ca. 30 % der Bildbreite -->
+          <a-gltf-model src="#kolben" metall scale="2.6 2.6 2.6"></a-gltf-model>
+        </a-entity>
+      </a-entity>
+    </a-entity>
+
+  </a-scene>
+</body>
+</html>
