@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aquarium AR</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <style>
+    body { margin: 0; }
+    #hud {
+      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+      z-index: 10000; font: 14px/1.2 system-ui, sans-serif;
+      background: rgba(0,0,0,.55); color: #fff; border-radius: 18px; padding: 8px 14px;
+    }
+    #hud a { color: #9ff3ff; margin: 0 6px; text-decoration: none; }
+    #hud a.on { color: #fff; font-weight: 600; text-decoration: underline; }
+  </style>
+
+  <script>
+  // ------------------------------------------------------------------
+  // Settings via URL:  ?mode=full | overlay   ?fog=0   ?gaze=0
+  //   full    : AR re-renders the whole tank through the window (portal)
+  //   overlay : only cube + cylinders, drawn over your own painted mural
+  // ------------------------------------------------------------------
+  const P = new URLSearchParams(location.search);
+  const MODE = P.get('mode') === 'overlay' ? 'overlay' : 'full';
+  const FOG  = P.get('fog') !== '0';
+  const GAZE = P.get('gaze') !== '0';
+
+  AFRAME.registerComponent('aquarium', {
+    init() {
+      this.mixer = null;
+      this.gaze = null;
+      this.camPos = new THREE.Vector3();
+      this.q0 = new THREE.Quaternion();
+      this.qt = new THREE.Quaternion();
+      this.el.addEventListener('model-loaded', () => this.setup());
+    },
+
+    setup() {
+      const model = this.el.getObject3D('mesh');
+      const scene = this.el.sceneEl;
+      const env = this.makeEnvMap(scene.renderer);
+
+      model.traverse(o => {
+        if (o.name.startsWith('Head_Gaze')) this.gaze = o;
+        if (!o.isMesh) return;
+
+        // Portal: invisible, but writes depth -> tank only visible through the window
+        if (o.name.startsWith('AR_PortalMask')) {
+          o.material = new THREE.MeshBasicMaterial({ colorWrite: false });
+          o.renderOrder = -1;
+          return;
+        }
+        if (MODE === 'overlay' && !/^(Cube_|Eye_|Pupil_|Cylinder_)/.test(o.name)) {
+          o.visible = false;
+          return;
+        }
+        const m = o.material;
+        if (m && m.isMeshStandardMaterial) {   // reflections so metal doesn't look black
+          m.envMap = env;
+          m.envMapIntensity = 1.0;
+          m.needsUpdate = true;
+        }
+      });
+
+      // Animation: all clips share one 10 s loop; gaze is computed live, so drop its baked track
+      const clips = model.animations || [];
+      if (clips.length) {
+        this.mixer = new THREE.AnimationMixer(model);
+        clips.forEach(clip => {
+          clip.tracks = clip.tracks.filter(t => !t.name.startsWith('Head_Gaze'));
+          if (!clip.tracks.length) return;
+          const t0 = clip.tracks[0].times[0];
+          clip.tracks.forEach(t => t.shift(-t0));
+          clip.resetDuration();
+          this.mixer.clipAction(clip).play();
+        });
+      }
+
+      // Underwater haze: farther = more blue-green
+      if (FOG) scene.object3D.fog = new THREE.Fog(0x1d5f66, 1.0, 5.0);
+    },
+
+    makeEnvMap(renderer) {
+      // Simple vertical gradient (bright surface, teal water, dark floor) as reflection source
+      const c = document.createElement('canvas');
+      c.width = 4; c.height = 256;
+      const g = c.getContext('2d');
+      const grd = g.createLinearGradient(0, 0, 0, 256);
+      grd.addColorStop(0.0, '#eaffff');
+      grd.addColorStop(0.45, '#3d9aa3');
+      grd.addColorStop(1.0, '#0b2326');
+      g.fillStyle = grd; g.fillRect(0, 0, 4, 256);
+      const tex = new THREE.CanvasTexture(c);
+      if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+      const envScene = new THREE.Scene();
+      envScene.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16),
+        new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide })));
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const rt = pmrem.fromScene(envScene, 0.04);
+      pmrem.dispose();
+      return rt.texture;
+    },
+
+    tick(t, dt) {
+      if (this.mixer) this.mixer.update(Math.min(dt || 0, 100) / 1000);
+      if (GAZE && this.gaze) {
+        // Head turns smoothly towards the phone camera (= the viewer's eyes)
+        this.el.sceneEl.camera.getWorldPosition(this.camPos);
+        this.q0.copy(this.gaze.quaternion);
+        this.gaze.lookAt(this.camPos);
+        this.qt.copy(this.gaze.quaternion);
+        this.gaze.quaternion.copy(this.q0).slerp(this.qt, 0.12);
+      }
+    }
+  });
+  </script>
+</head>
+<body>
+  <a-scene mindar-image="imageTargetSrc: targets.mind; filterMinCF: 0.0001; filterBeta: 0.01"
+           vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false"
+           renderer="colorManagement: true">
+    <a-assets>
+      <a-asset-item id="aq" src="aquarium.glb"></a-asset-item>
+    </a-assets>
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+    <a-light type="ambient" intensity="0.5" color="#bfe9ee"></a-light>
+    <a-light type="directional" position="0 3 1" intensity="1.0" color="#e0fbff"></a-light>
+
+    <a-entity mindar-image-target="targetIndex: 0">
+      <!-- 1 unit = mural width (1.0 m). Model is in metres with the window centre at
+           1.50 m height, so shift it down by 1.5 -> window centre on the image centre. -->
+      <a-entity gltf-model="#aq" position="0 -1.5 0" aquarium></a-entity>
+    </a-entity>
+  </a-scene>
+
+  <div id="hud">
+    Mode:
+    <a id="m-full" href="?mode=full">Full tank</a>
+    <a id="m-over" href="?mode=overlay">Overlay</a>
+  </div>
+  <script>
+    document.getElementById(MODE === 'overlay' ? 'm-over' : 'm-full').classList.add('on');
+  </script>
+</body>
+</html>
